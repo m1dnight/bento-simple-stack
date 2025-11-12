@@ -21,7 +21,7 @@ RUN apt-get update && \
 #     mv /tmp/bento-bundle/bento-cli /app/bento_cli && \
 #     rm -rf /tmp/*
 
-COPY bento-bundle-linux-amd64.tar.gz /tmp/bento-bundle.tar.gz
+COPY bento-bundle.tar.gz /tmp/bento-bundle.tar.gz
 RUN mkdir -p /app && \
     tar -xzf /tmp/bento-bundle.tar.gz -C /tmp && \
     mv /tmp/bento-bundle/bento-agent /app/agent && \

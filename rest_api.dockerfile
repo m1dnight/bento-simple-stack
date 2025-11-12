@@ -19,7 +19,7 @@ RUN apt-get update && \
 #     mv /tmp/bento-bundle/bento-rest-api /app/rest_api && \
 #     rm -rf /tmp/*
 
-COPY bento-bundle-linux-amd64.tar.gz /tmp/bento-bundle.tar.gz
+COPY bento-bundle.tar.gz /tmp/bento-bundle.tar.gz
 RUN mkdir -p /app && \
     tar -xzf /tmp/bento-bundle.tar.gz -C /tmp && \
     mv /tmp/bento-bundle/bento-rest-api /app/rest_api && \
