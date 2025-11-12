@@ -1,0 +1,216 @@
+services:
+  #----------------------------------------------------------------------------
+  # Redis
+
+  redis:
+    hostname: ${REDIS_HOST}
+    image: ${REDIS_IMG}
+    restart: unless-stopped
+    ports:
+      - 6379:6379
+    volumes:
+      - redis-data:/data
+    command: redis-server --maxmemory-policy allkeys-lru --save 900 1 --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  #----------------------------------------------------------------------------
+  # Postgres
+
+  postgres:
+    hostname: ${POSTGRES_HOST}
+    image: ${POSTGRES_IMG}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "${POSTGRES_PORT}"
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    command: -p ${POSTGRES_PORT}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -p ${POSTGRES_PORT}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  #----------------------------------------------------------------------------
+  # Minio
+
+  minio:
+    hostname: ${MINIO_HOST}
+    image: ${MINIO_IMG}
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASS}
+      - MINIO_DEFAULT_BUCKETS=${MINIO_BUCKET}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  #----------------------------------------------------------------------------
+  # Exec Agent
+
+  exec_agent0:
+    runtime: nvidia
+    build:
+      context: .
+      dockerfile: agent.dockerfile
+      args:
+        BINARY_URL: ${BENTO_BINARY_URL}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    mem_limit: 4G
+    cpus: 3
+    entrypoint: /app/agent -t exec --segment-po2 ${SEGMENT_SIZE} --redis-ttl ${REDIS_TTL}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      S3_URL: ${S3_URL}
+      S3_BUCKET: ${MINIO_BUCKET}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASS}
+      RUST_LOG: ${RUST_LOG}
+      RISC0_HOME: /usr/local/risc0
+      RUST_BACKTRACE: 1
+      POVW_LOG_ID: ${POVW_LOG_ID}
+      RISC0_KECCAK_PO2: ${RISC0_KECCAK_PO2}
+
+  #----------------------------------------------------------------------------
+  # Aux Agent
+
+  aux_agent:
+    runtime: nvidia
+    build:
+      context: .
+      dockerfile: agent.dockerfile
+      args:
+        BINARY_URL: ${BENTO_BINARY_URL}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    mem_limit: 256M
+    cpus: 1
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      S3_URL: ${S3_URL}
+      S3_BUCKET: ${MINIO_BUCKET}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASS}
+      RUST_LOG: ${RUST_LOG}
+      RISC0_HOME: /usr/local/risc0
+      RUST_BACKTRACE: 1
+      POVW_LOG_ID: ${POVW_LOG_ID}
+    entrypoint: /app/agent -t aux --monitor-requeue --redis-ttl ${REDIS_TTL}
+
+  #----------------------------------------------------------------------------
+  # GPU  Agent
+
+  gpu_prove_agent0:
+    runtime: nvidia
+    build:
+      context: .
+      dockerfile: agent.dockerfile
+      args:
+        BINARY_URL: ${BENTO_BINARY_URL}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      S3_URL: ${S3_URL}
+      S3_BUCKET: ${MINIO_BUCKET}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASS}
+      RUST_LOG: ${RUST_LOG}
+      RISC0_HOME: /usr/local/risc0
+      RUST_BACKTRACE: 1
+      POVW_LOG_ID: ${POVW_LOG_ID}
+    mem_limit: 4G
+    cpus: 4
+    entrypoint: /app/agent -t prove --redis-ttl ${REDIS_TTL}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+  #----------------------------------------------------------------------------
+  # Rest API
+
+  rest_api:
+    build:
+      context: .
+      dockerfile: rest_api.dockerfile
+      args:
+        BINARY_URL: ${BENTO_BINARY_URL}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    mem_limit: 1G
+    cpus: 1
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      S3_URL: ${S3_URL}
+      S3_BUCKET: ${MINIO_BUCKET}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASS}
+      RUST_LOG: ${RUST_LOG}
+      RISC0_HOME: /usr/local/risc0
+      RUST_BACKTRACE: 1
+      POVW_LOG_ID: ${POVW_LOG_ID}
+    ports:
+      - "${API_HTTP_PORT}:8081"
+    entrypoint: /app/rest_api --bind-addr 0.0.0.0:8081 --snark-timeout ${SNARK_TIMEOUT:-180}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  redis-data:
+  postgres-data:
+  minio-data:
